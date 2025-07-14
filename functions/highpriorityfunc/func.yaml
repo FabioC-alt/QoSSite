@@ -1,0 +1,13 @@
+# $schema: https://raw.githubusercontent.com/knative/func/refs/tags/v0.36.0/schema/func_yaml-schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/knative/func/refs/tags/v0.36.0/schema/func_yaml-schema.json
+specVersion: 0.36.0
+name: highpriorityfunc
+runtime: go
+image: docker.io/fabiocalt/highpriorityfunc
+namespace: default
+created: 2025-07-11T17:25:26.456347042+02:00
+build:
+  builder: pack
+deploy:
+  namespace: default
+  image: docker.io/fabiocalt/highpriorityfunc@sha256:54f953f42145dfc9473d8578da5e374bf270c32120126a9fcc8401b7f05fd441

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nats-subscriber
+spec:
+  containers:
+    - name: sub
+      image: natsio/nats-box
+      command: ["sh", "-c", "nats sub updates -s nats://nats:4222"]
+

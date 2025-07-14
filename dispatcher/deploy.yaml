@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-priority-subscriber
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats-subscriber
+  template:
+    metadata:
+      labels:
+        app: nats-subscriber
+    spec:
+      containers:
+      - name: subscriber
+        image: fabiocalt/nats-ps
+        imagePullPolicy: Always
+
