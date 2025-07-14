@@ -8,7 +8,9 @@ WORKDIR /app
 COPY agent.py .
 
 # Installa la libreria requests
-RUN pip install --no-cache-dir requests
+RUN pip install --no-cache-dir requests flask
+
+EXPOSE 5000
 
 # Comando di default per eseguire lo script
 CMD ["python", "-u", "agent.py"]
