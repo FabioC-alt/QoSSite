@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nats-priority-subscriber
+  name: dispatcher 
 spec:
   replicas: 1
   selector:
@@ -14,6 +14,6 @@ spec:
     spec:
       containers:
       - name: subscriber
-        image: fabiocalt/nats-ps
+        image: fabiocalt/qosnatsimage
         imagePullPolicy: Always
 

@@ -5,7 +5,7 @@ async def main():
     print("Script Started")
     nc = NATS()
 
-    await nc.connect("nats://10.96.123.176:4222")  # Use your service name if in K8s
+    await nc.connect("nats://10.43.34.220:4222")  # Use your service name if in K8s
 
     async def handle_high(msg):
         print("🔴 High priority task received")
