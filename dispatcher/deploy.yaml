@@ -1,19 +1,35 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dispatcher 
+  name: dispatcher-channel1
+  labels:
+    app: rabbit-dispatcher
+    channel: channel1
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nats-subscriber
+      app: rabbit-dispatcher
+      channel: channel1
   template:
     metadata:
       labels:
-        app: nats-subscriber
+        app: rabbit-dispatcher
+        channel: channel1
     spec:
       containers:
-      - name: subscriber
-        image: fabiocalt/qosnatsimage
-        imagePullPolicy: Always
+        - name: dispatcher
+          image: fabiocalt/dispatcher:latest
+          args: ["channel1"]   # pass the channel as argument
+          env:
+            - name: RABBITMQ_URL
+              value: "amqp://myuser:mypassword@my-rabbitmq:5672/"
+          # Optional resource requests/limits:
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
 
