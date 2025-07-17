@@ -7,7 +7,7 @@ HOST = '0.0.0.0'
 PORT = 8000
 RABBITMQ_URL = "amqp://myuser:mypassword@my-rabbitmq:5672/"
 ALLOWED_LEVELS = {'high', 'low'}
-NUM_CHANNELS = 4  # Number of balanced channels
+NUM_CHANNELS = 1  # Number of balanced channels
 
 # Dynamically generate channel names: channel1, channel2, ...
 CHANNELS = [f"channel{i}" for i in range(NUM_CHANNELS)]
