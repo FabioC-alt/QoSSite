@@ -13,8 +13,8 @@ def trigger_action(level):
         print(f"Unknown trigger level: {level}")
         return
 
-    # Construct the forwarding URL
-    url = f"{CONTROLLER_URL_BASE}/trigger?level={level}"
+    # Construct the forwarding URL with level as part of the path (not query param)
+    url = f"{CONTROLLER_URL_BASE}/{level}"
     try:
         response = requests.get(url, timeout=2)
         print(f"Forwarded to controller: {response.status_code} - {response.text}")

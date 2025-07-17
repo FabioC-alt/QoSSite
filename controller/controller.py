@@ -1,21 +1,35 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
+import requests
 
 HOST = '0.0.0.0'
-PORT = 8000  # Change as needed
+PORT = 8000
+MOM_BASE_URL = 'http://mom:8000/publish'  # Base MOM URL
+
+ALLOWED_LEVELS = {'high', 'low'}
 
 class ControllerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_url = urlparse(self.path)
-        query_params = parse_qs(parsed_url.query)
-        level = query_params.get('level', [None])[0]
+        path_parts = parsed_url.path.strip("/").split("/")
 
-        if level:
+        if len(path_parts) == 1 and path_parts[0] in ALLOWED_LEVELS:
+            level = path_parts[0]
             print(f"Received trigger with level: {level}")
-            response = f"Level received: {level}\n"
-            self.send_response(200)
+
+            try:
+                mom_url = f"{MOM_BASE_URL}/{level}"
+                payload = {'message': level}  # <-- Changed here to 'message'
+                mom_response = requests.post(mom_url, json=payload)
+                mom_response.raise_for_status()
+                response = f"Level '{level}' forwarded to MOM at {mom_url}\n"
+                self.send_response(200)
+            except requests.exceptions.RequestException as e:
+                print(f"Error posting to MOM: {e}")
+                response = f"Failed to post to MOM: {e}\n"
+                self.send_response(502)
         else:
-            response = "Missing 'level' parameter\n"
+            response = "Invalid or missing priority level. Use /high or /low\n"
             self.send_response(400)
 
         self.send_header('Content-type', 'text/plain')
