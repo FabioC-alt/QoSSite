@@ -23,11 +23,12 @@ kind: Service
 metadata:
   name: controller-service
 spec:
+  type: NodePort                 # <-- changed from ClusterIP to NodePort
   selector:
     app: controller
   ports:
   - protocol: TCP
     port: 80
     targetPort: 8000
-  type: ClusterIP
+    nodePort: 30081             # <-- optional fixed NodePort in allowed range (30000-32767)
 

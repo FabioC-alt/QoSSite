@@ -1,10 +1,10 @@
-import json
 import asyncio
 import aio_pika
 import aiohttp
 import logging
 import signal
 import sys
+import json
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -13,15 +13,17 @@ rabbitmq_port = 5672
 username = "myuser"
 password = "mypassword"
 
-queue_names = ["channel0.high", "channel0.low"]
 stop_event = asyncio.Event()
+
+# Replace this with your actual endpoint when ready
+curl_target_url = "http://192.168.17.121:30081/decrement"
+
 
 
 def shutdown():
     logging.info("Shutdown signal received. Stopping consumer...")
     stop_event.set()
 
-import json  # Add this import at the top
 
 async def consume_queue(queue_name, channel):
     queue = await channel.declare_queue(queue_name, durable=True)
@@ -54,20 +56,20 @@ async def consume_queue(queue_name, channel):
                         resp_text = await resp.text()
                         logging.info(f"[{queue_name}] HTTP {resp.status}: {resp_text}")
 
-                    # Prepare and send JSON data via POST (to be customized)
+                    channel_base = queue_name.split('.')[0]
+                    
+                    # Prepare and send JSON data via POST
                     json_data = {
-                        "channel": queue_name,
-                        "priority": priority,
-                        "message": decoded  # Optional: include actual message
+                        "channel": channel_base,
+                        "level": priority,
                     }
 
-                    curl_target_url = "http://example.com/your-endpoint"  # <-- You tell me where to send this
                     async with session.post(curl_target_url, json=json_data) as post_resp:
                         post_resp_text = await post_resp.text()
                         logging.info(f"[{queue_name}] POST {post_resp.status}: {post_resp_text}")
 
                 except Exception as e:
-                    logging.error(f"[{queue_name}] Failed to send HTTP request: {e}")
+                    logging.error(f"[{queue_name}] Failed to process message: {e}")
 
 
 async def main():
@@ -83,8 +85,18 @@ async def main():
         channel = await connection.channel()
         await channel.set_qos(prefetch_count=1)
 
-        # Start consumers
-        tasks = [asyncio.create_task(consume_queue(q, channel)) for q in queue_names]
+        # High priority: 5 workers
+        high_priority_tasks = [
+            asyncio.create_task(consume_queue("channel0.high", channel))
+            for _ in range(5)
+        ]
+
+        # Low priority: 1 worker
+        low_priority_tasks = [
+            asyncio.create_task(consume_queue("channel0.low", channel))
+        ]
+
+        tasks = high_priority_tasks + low_priority_tasks
 
         await stop_event.wait()
 
