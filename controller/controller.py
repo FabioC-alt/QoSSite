@@ -61,6 +61,57 @@ class ControllerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response.encode())
 
+    def do_POST(self):
+        parsed_url = urlparse(self.path)
+        if parsed_url.path == "/decrement":
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length == 0:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"No JSON body provided\n")
+                return
+
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Invalid JSON\n")
+                return
+
+            channel = data.get("channel")
+            level = data.get("level")
+
+            if channel not in CHANNELS:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(f"Invalid channel: {channel}\n".encode())
+                return
+
+            if level not in ALLOWED_LEVELS:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(f"Invalid level: {level}\n".encode())
+                return
+
+            # Decrement safely (not below zero)
+            if request_counts[channel][level] > 0:
+                request_counts[channel][level] -= 1
+                self.send_response(200)
+                response = f"Decremented count for {channel} at level {level}\n"
+            else:
+                self.send_response(200)
+                response = f"Count already zero for {channel} at level {level}\n"
+
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(response.encode())
+
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Unknown POST endpoint\n")
 
 async def publish_message(routing_key: str, message_body: bytes):
     # Publish a persistent message to the exchange with the routing key
