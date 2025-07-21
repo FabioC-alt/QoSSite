@@ -1,0 +1,6 @@
+requests
+aio-pika
+opentelemetry-sdk
+opentelemetry-api
+opentelemetry-exporter-jaeger-thrift
+deprecated

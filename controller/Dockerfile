@@ -2,8 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install requests
-RUN pip install aio-pika 
+COPY requirements.txt .
+
+RUN pip install -r requirements.txt
 
 COPY controller.py .
 
