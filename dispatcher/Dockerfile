@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY dispatcher.py .
-RUN pip install aio-pika
-RUN pip install aiohttp
+COPY requirements.txt . 
+RUN pip install -r requirements.txt
 
 CMD ["python", "dispatcher.py"]
 

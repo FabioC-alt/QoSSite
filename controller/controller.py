@@ -1,5 +1,3 @@
-# controller.py
-
 import asyncio
 import json
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -147,10 +145,18 @@ class ControllerHandler(BaseHTTPRequestHandler):
 async def publish_message(routing_key: str, message_body: bytes):
     with tracer.start_as_current_span("publish_message") as span:
         span.set_attribute("publish.routing_key", routing_key)
-        await exchange.publish(
-            aio_pika.Message(body=message_body, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
-            routing_key=routing_key
+
+        # Inject trace context into RabbitMQ message headers
+        headers = {}
+        TraceContextTextMapPropagator().inject(headers)
+
+        message = aio_pika.Message(
+            body=message_body,
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            headers=headers
         )
+
+        await exchange.publish(message, routing_key=routing_key)
 
 async def print_request_counts():
     while True:

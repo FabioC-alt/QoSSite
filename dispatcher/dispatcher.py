@@ -6,6 +6,13 @@ import signal
 import sys
 import json
 
+from opentelemetry import trace, context
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 rabbitmq_host = "my-rabbitmq.default.svc.cluster.local"
@@ -15,15 +22,21 @@ password = "mypassword"
 
 stop_event = asyncio.Event()
 
-# Replace this with your actual endpoint when ready
 curl_target_url = "http://192.168.17.121:30081/decrement"
 
-
+# OpenTelemetry setup
+trace.set_tracer_provider(
+    TracerProvider(resource=Resource.create({SERVICE_NAME: "dispatcher"}))
+)
+tracer = trace.get_tracer("dispatcher")
+jaeger_exporter = JaegerExporter(
+    collector_endpoint="http://jaeger.observability.svc.cluster.local:14268/api/traces"
+)
+trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(jaeger_exporter))
 
 def shutdown():
     logging.info("Shutdown signal received. Stopping consumer...")
     stop_event.set()
-
 
 async def consume_queue(queue_name, channel):
     queue = await channel.declare_queue(queue_name, durable=True)
@@ -33,43 +46,76 @@ async def consume_queue(queue_name, channel):
         async for message in queue_iter:
             if stop_event.is_set():
                 break
-            async with message.process():
-                decoded = message.body.decode()
-                logging.info(f"[{queue_name}] Received message: {decoded}")
 
-                try:
-                    if queue_name == "channel0.high":
-                        headers = {
-                            "Host": "highpriorityfunc.default.192.168.17.118.sslip.io"
-                        }
-                        url = "http://192.168.17.118"
-                        priority = "high"
+            # Extract trace context from message headers
+            headers = {}
+            if message.headers:
+                # RabbitMQ headers can be nested or byte encoded, normalize if needed
+                for k, v in message.headers.items():
+                    if isinstance(v, bytes):
+                        headers[k] = v.decode()
                     else:
-                        headers = {
-                            "Host": "lowpriorityfunc.default.192.168.17.118.sslip.io"
+                        headers[k] = str(v)
+
+            ctx = TraceContextTextMapPropagator().extract(headers)
+            token = context.attach(ctx)
+
+            try:
+                async with message.process():
+                    decoded = message.body.decode()
+                    logging.info(f"[{queue_name}] Received message: {decoded}")
+
+                    with tracer.start_as_current_span(f"process_message_{queue_name}") as span:
+                        span.set_attribute("messaging.system", "rabbitmq")
+                        span.set_attribute("messaging.destination", queue_name)
+                        span.set_attribute("messaging.message_payload_size_bytes", len(message.body))
+
+                        if queue_name == "channel0.high":
+                            headers = {
+                                "Host": "highpriorityfunc.default.192.168.17.118.sslip.io"
+                            }
+                            url = "http://192.168.17.118"
+                            priority = "high"
+                        else:
+                            headers = {
+                                "Host": "lowpriorityfunc.default.192.168.17.118.sslip.io"
+                            }
+                            url = "http://192.168.17.118"
+                            priority = "low"
+
+                        # Inject current trace context into HTTP headers for downstream propagation
+                        http_headers = {}
+                        TraceContextTextMapPropagator().inject(http_headers)
+                        # Merge with your custom headers for the request
+                        http_headers.update(headers)
+
+                        # Send GET request with tracing headers
+                        async with session.get(url, headers=http_headers) as resp:
+                            resp_text = await resp.text()
+                            logging.info(f"[{queue_name}] HTTP {resp.status}: {resp_text}")
+                            span.set_attribute("http.status_code", resp.status)
+
+                        channel_base = queue_name.split('.')[0]
+
+                        # Prepare JSON data to POST (tracing context injected here too)
+                        json_data = {
+                            "channel": channel_base,
+                            "level": priority,
                         }
-                        url = "http://192.168.17.118"
-                        priority = "low"
 
-                    # Send GET request to the function endpoint
-                    async with session.get(url, headers=headers) as resp:
-                        resp_text = await resp.text()
-                        logging.info(f"[{queue_name}] HTTP {resp.status}: {resp_text}")
+                        # For POST also propagate trace context
+                        post_headers = {}
+                        TraceContextTextMapPropagator().inject(post_headers)
 
-                    channel_base = queue_name.split('.')[0]
-                    
-                    # Prepare and send JSON data via POST
-                    json_data = {
-                        "channel": channel_base,
-                        "level": priority,
-                    }
+                        async with session.post(curl_target_url, json=json_data, headers=post_headers) as post_resp:
+                            post_resp_text = await post_resp.text()
+                            logging.info(f"[{queue_name}] POST {post_resp.status}: {post_resp_text}")
+                            span.set_attribute("http.post_status_code", post_resp.status)
 
-                    async with session.post(curl_target_url, json=json_data) as post_resp:
-                        post_resp_text = await post_resp.text()
-                        logging.info(f"[{queue_name}] POST {post_resp.status}: {post_resp_text}")
-
-                except Exception as e:
-                    logging.error(f"[{queue_name}] Failed to process message: {e}")
+            except Exception as e:
+                logging.error(f"[{queue_name}] Failed to process message: {e}")
+            finally:
+                context.detach(token)
 
 
 async def main():
