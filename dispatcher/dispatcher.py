@@ -5,6 +5,7 @@ import logging
 import signal
 import sys
 import json
+import time
 
 from opentelemetry import trace, context
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -23,6 +24,7 @@ password = "mypassword"
 stop_event = asyncio.Event()
 
 curl_target_url = "http://192.168.17.121:30081/decrement"
+ip_executor = "192.168.17.118"
 
 # OpenTelemetry setup
 trace.set_tracer_provider(
@@ -58,8 +60,15 @@ async def consume_queue(queue_name, channel):
                         headers[k] = str(v)
 
             ctx = TraceContextTextMapPropagator().extract(headers)
+            
             token = context.attach(ctx)
+            
+            send_ts = float(headers.get("send_ts", 0))  # This is the sender's time.time()
+            recv_ts = time.time()                      # This is now
 
+            latency = recv_ts - send_ts
+
+            logging.info(f"Latency: {latency:.6f} seconds")
             try:
                 async with message.process():
                     decoded = message.body.decode()
@@ -69,18 +78,17 @@ async def consume_queue(queue_name, channel):
                         span.set_attribute("messaging.system", "rabbitmq")
                         span.set_attribute("messaging.destination", queue_name)
                         span.set_attribute("messaging.message_payload_size_bytes", len(message.body))
-
                         if queue_name == "channel0.high":
                             headers = {
-                                "Host": "highpriorityfunc.default.192.168.17.118.sslip.io"
+                                "Host": f"highpriorityfunc.default.{ip_executor}.sslip.io"
                             }
-                            url = "http://192.168.17.118"
+                            url = f"http://{ip_executor}"
                             priority = "high"
                         else:
                             headers = {
-                                "Host": "lowpriorityfunc.default.192.168.17.118.sslip.io"
+                                "Host": f"lowpriorityfunc.default.{ip_executor}.sslip.io"
                             }
-                            url = "http://192.168.17.118"
+                            url = f"http://{ip_executor}"
                             priority = "low"
 
                         # Inject current trace context into HTTP headers for downstream propagation
@@ -90,10 +98,13 @@ async def consume_queue(queue_name, channel):
                         http_headers.update(headers)
 
                         # Send GET request with tracing headers
-                        async with session.get(url, headers=http_headers) as resp:
-                            resp_text = await resp.text()
-                            logging.info(f"[{queue_name}] HTTP {resp.status}: {resp_text}")
-                            span.set_attribute("http.status_code", resp.status)
+                        with tracer.start_as_current_span(f"FaaS_calling_{priority}") as span:
+                            span.set_attribute("faas.system", "knative")
+
+                            async with session.get(url, headers=http_headers) as resp:
+                                resp_text = await resp.text()
+                                logging.info(f"[{queue_name}] HTTP {resp.status}: {resp_text}")
+                                span.set_attribute("http.status_code", resp.status)
 
                         channel_base = queue_name.split('.')[0]
 

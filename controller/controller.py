@@ -4,7 +4,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 import aio_pika
 from threading import Lock
-
+import time
 from opentelemetry import trace
 from opentelemetry.context import attach, detach
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -149,7 +149,10 @@ async def publish_message(routing_key: str, message_body: bytes):
         # Inject trace context into RabbitMQ message headers
         headers = {}
         TraceContextTextMapPropagator().inject(headers)
-
+        
+        headers["send_ts"] = str(time.time())
+        
+        
         message = aio_pika.Message(
             body=message_body,
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
