@@ -70,8 +70,12 @@ async def consume_queue(queue_name, channel):
             recv_ts = time.time()                      # This is now
 
             latency = recv_ts - send_ts
-
-            logging.info(f"Latency: {latency:.6f} seconds")
+        
+            log_line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} Latency in {queue_name}: {latency:.6f} seconds\n"
+            
+            with open("latency_metrics.txt", "a") as f:
+                f.write(log_line)
+            logging.info(f"Latency in {queue_name}: {latency:.6f} seconds")
             try:
                 async with message.process():
                     decoded = message.body.decode()
