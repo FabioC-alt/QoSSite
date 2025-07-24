@@ -12,13 +12,14 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+import os
 
 # Config
 HOST = '0.0.0.0'
 PORT = 8000
 RABBITMQ_URL = "amqp://myuser:mypassword@my-rabbitmq:5672/"
 ALLOWED_LEVELS = {'high', 'low'}
-NUM_CHANNELS = 1
+NUM_CHANNELS = int(os.getenv("NUM_CHANNEL","0"))
 CHANNELS = [f"channel{i}" for i in range(NUM_CHANNELS)]
 request_counts = {ch: {'high': 0, 'low': 0} for ch in CHANNELS}
 counts_lock = Lock()

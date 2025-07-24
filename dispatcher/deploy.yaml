@@ -1,19 +1,75 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dispatcher 
+  name: dispatcher-1
   labels:
-    app: dispatcher
+    app: dispatcher-1
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: dispatcher
+      app: dispatcher-1
   template:
     metadata:
       labels:
-        app: dispatcher
+        app: dispatcher-1
     spec:
       containers:
       - name: consumer
         image: fabiocalt/dispatcher:latest
+        env:
+        - name: IP_EXECUTOR
+          value: "192.168.17.118"
+        - name: CHANNEL
+          value: "channel0"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatcher-2
+  labels:
+    app: dispatcher-2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dispatcher-2
+  template:
+    metadata:
+      labels:
+        app: dispatcher-2
+    spec:
+      containers:
+      - name: consumer
+        image: fabiocalt/dispatcher:latest
+        env:
+        - name: IP_EXECUTOR
+          value: "192.168.17.48"
+        - name: CHANNEL
+          value: "channel1"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatcher-3
+  labels:
+    app: dispatcher-3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dispatcher-3
+  template:
+    metadata:
+      labels:
+        app: dispatcher-3
+    spec:
+      containers:
+      - name: consumer
+        image: fabiocalt/dispatcher:latest
+        env:
+        - name: IP_EXECUTOR
+          value: "192.168.17.47"
+        - name: CHANNEL
+          value: "channel2"
+

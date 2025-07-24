@@ -6,6 +6,7 @@ import signal
 import sys
 import json
 import time
+import os
 
 from opentelemetry import trace, context
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -24,7 +25,9 @@ password = "mypassword"
 stop_event = asyncio.Event()
 
 curl_target_url = "http://192.168.17.121:30081/decrement"
-ip_executor = "192.168.17.118"
+
+ip_executor = os.getenv("IP_EXECUTOR", "default_ip")  # fallback if not set
+request_channel = os.getenv("CHANNEL", "default_channel") 
 
 # OpenTelemetry setup
 trace.set_tracer_provider(
@@ -78,19 +81,20 @@ async def consume_queue(queue_name, channel):
                         span.set_attribute("messaging.system", "rabbitmq")
                         span.set_attribute("messaging.destination", queue_name)
                         span.set_attribute("messaging.message_payload_size_bytes", len(message.body))
-                        if queue_name == "channel0.high":
+                        if queue_name.endswith("high"):
                             headers = {
                                 "Host": f"highpriorityfunc.default.{ip_executor}.sslip.io"
                             }
                             url = f"http://{ip_executor}"
                             priority = "high"
-                        else:
+                        elif queue_name.endswith("low"):
                             headers = {
                                 "Host": f"lowpriorityfunc.default.{ip_executor}.sslip.io"
                             }
                             url = f"http://{ip_executor}"
                             priority = "low"
-
+                        else: 
+                            logging.error(f"Unexpected queue_name: {queue_name}")
                         # Inject current trace context into HTTP headers for downstream propagation
                         http_headers = {}
                         TraceContextTextMapPropagator().inject(http_headers)
@@ -144,13 +148,13 @@ async def main():
 
         # High priority: 5 workers
         high_priority_tasks = [
-            asyncio.create_task(consume_queue("channel0.high", channel))
+            asyncio.create_task(consume_queue(f"{request_channel}.high", channel))
             for _ in range(5)
         ]
 
         # Low priority: 1 worker
         low_priority_tasks = [
-            asyncio.create_task(consume_queue("channel0.low", channel))
+            asyncio.create_task(consume_queue(f"{request_channel}.low", channel))
         ]
 
         tasks = high_priority_tasks + low_priority_tasks
