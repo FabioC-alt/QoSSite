@@ -19,9 +19,11 @@ spec:
         image: fabiocalt/dispatcher:latest
         env:
         - name: IP_EXECUTOR
-          value: "192.168.17.118"
+          value: "192.168.17.90"
         - name: CHANNEL
           value: "channel0"
+        - name: IP_CONTROLLER
+          value: "http://192.168.17.92:30081/decrement"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -44,9 +46,11 @@ spec:
         image: fabiocalt/dispatcher:latest
         env:
         - name: IP_EXECUTOR
-          value: "192.168.17.48"
+          value: "192.168.17.91"
         - name: CHANNEL
           value: "channel1"
+        - name: IP_CONTROLLER
+          value: "http://192.168.17.92:30081/decrement"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -69,7 +73,9 @@ spec:
         image: fabiocalt/dispatcher:latest
         env:
         - name: IP_EXECUTOR
-          value: "192.168.17.47"
+          value: "192.168.17.89"
         - name: CHANNEL
           value: "channel2"
+        - name: IP_CONTROLLER
+          value: "http://192.168.17.92:30081/decrement"
 

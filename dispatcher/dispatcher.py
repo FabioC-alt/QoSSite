@@ -24,7 +24,7 @@ password = "mypassword"
 
 stop_event = asyncio.Event()
 
-curl_target_url = "http://192.168.17.121:30081/decrement"
+curl_target_url = os.getenv("IP_CONTROLLER",  "http://192.168.17.121:30081/decrement")
 
 ip_executor = os.getenv("IP_EXECUTOR", "default_ip")  # fallback if not set
 request_channel = os.getenv("CHANNEL", "default_channel") 
