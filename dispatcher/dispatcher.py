@@ -87,13 +87,13 @@ async def consume_queue(queue_name, channel):
                         span.set_attribute("messaging.message_payload_size_bytes", len(message.body))
                         if queue_name.endswith("high"):
                             headers = {
-                                "Host": f"highpriorityfunc.default.{ip_executor}.sslip.io"
+                                "Host": f"highgo.default.{ip_executor}.sslip.io"
                             }
                             url = f"http://{ip_executor}"
                             priority = "high"
                         elif queue_name.endswith("low"):
                             headers = {
-                                "Host": f"lowpriorityfunc.default.{ip_executor}.sslip.io"
+                                "Host": f"lowgo.default.{ip_executor}.sslip.io"
                             }
                             url = f"http://{ip_executor}"
                             priority = "low"
