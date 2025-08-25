@@ -24,6 +24,8 @@ password = "mypassword"
 
 stop_event = asyncio.Event()
 
+curl_target_url = os.getenv("IP_CONTROLLER",  "http://192.168.17.121:30081/decrement")
+
 ip_executor = os.getenv("IP_EXECUTOR", "default_ip")  # fallback if not set
 request_channel = os.getenv("CHANNEL", "default_channel") 
 
@@ -53,6 +55,7 @@ async def consume_queue(queue_name, channel):
             # Extract trace context from message headers
             headers = {}
             if message.headers:
+                # RabbitMQ headers can be nested or byte encoded, normalize if needed
                 for k, v in message.headers.items():
                     if isinstance(v, bytes):
                         headers[k] = v.decode()
@@ -60,18 +63,19 @@ async def consume_queue(queue_name, channel):
                         headers[k] = str(v)
 
             ctx = TraceContextTextMapPropagator().extract(headers)
+            
             token = context.attach(ctx)
             
-            send_ts = float(headers.get("send_ts", 0))  # Sender's timestamp
-            recv_ts = time.time()                      # Current time
+            send_ts = float(headers.get("send_ts", 0))  # This is the sender's time.time()
+            recv_ts = time.time()                      # This is now
 
             latency = recv_ts - send_ts
+        
             log_line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} Latency in {queue_name}: {latency:.6f} seconds\n"
             
             with open("latency_metrics.txt", "a") as f:
                 f.write(log_line)
             logging.info(f"Latency in {queue_name}: {latency:.6f} seconds")
-
             try:
                 async with message.process():
                     decoded = message.body.decode()
@@ -95,10 +99,10 @@ async def consume_queue(queue_name, channel):
                             priority = "low"
                         else: 
                             logging.error(f"Unexpected queue_name: {queue_name}")
-
-                        # Inject current trace context into HTTP headers
+                        # Inject current trace context into HTTP headers for downstream propagation
                         http_headers = {}
                         TraceContextTextMapPropagator().inject(http_headers)
+                        # Merge with your custom headers for the request
                         http_headers.update(headers)
 
                         # Send GET request with tracing headers
@@ -109,6 +113,23 @@ async def consume_queue(queue_name, channel):
                                 resp_text = await resp.text()
                                 logging.info(f"[{queue_name}] HTTP {resp.status}: {resp_text}")
                                 span.set_attribute("http.status_code", resp.status)
+
+                        channel_base = queue_name.split('.')[0]
+
+                        # Prepare JSON data to POST (tracing context injected here too)
+                        json_data = {
+                            "channel": channel_base,
+                            "level": priority,
+                        }
+
+                        # For POST also propagate trace context
+                        post_headers = {}
+                        TraceContextTextMapPropagator().inject(post_headers)
+
+                        async with session.post(curl_target_url, json=json_data, headers=post_headers) as post_resp:
+                            post_resp_text = await post_resp.text()
+                            logging.info(f"[{queue_name}] POST {post_resp.status}: {post_resp_text}")
+                            span.set_attribute("http.post_status_code", post_resp.status)
 
             except Exception as e:
                 logging.error(f"[{queue_name}] Failed to process message: {e}")
