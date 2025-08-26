@@ -3,6 +3,7 @@ from aiohttp import web
 import json
 import asyncio
 from datetime import datetime, timezone
+import psutil
 
 # Configuration
 PORT = 8000
@@ -26,12 +27,22 @@ async def serve_request(request_number, priority, executor, queue_timestamp):
     print(f"🚀 Serving request #{request_number} (priority={priority}), executor={executor}")
     print(f"   Queued at: {queue_timestamp}")
     print(f"   Wait time: {wait_time.total_seconds():.2f} seconds")
+    print(f"   Cpu Percent: {getNodeForExecution()}")
     
     # simulate some work
     await asyncio.sleep(0.5)
     
     end_time = datetime.now(timezone.utc).isoformat()
     print(f"✅ Completed request #{request_number} at {end_time}")
+
+def getNodeForExecution():
+    """Get CPU usage percentage for node execution decision"""
+    try:
+        cpu_percent = psutil.cpu_percent(interval=1)
+        return cpu_percent
+    except Exception as e:
+        print(f"Error getting CPU usage: {e}")
+        return None
 
 async def request_processor():
     """Background task that always serves high priority requests first."""
