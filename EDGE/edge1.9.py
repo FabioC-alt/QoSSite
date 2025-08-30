@@ -9,67 +9,63 @@ import time
 from urllib.parse import parse_qs
 import csv
 import os
-from datetime import datetime
 
-# ---------- Configuration ----------
+# Executor IPs
 EDGE_IP = "192.168.17.115"
 CLOUD_IP = "192.168.17.89"
 
-MAX_HIGH_QUEUE = 50
-MAX_LOW_QUEUE = 50
-MAX_RETRIES = 3
-RETRY_DELAY = 0.5  # seconds
-
-SNAPSHOT_FILE = "queue_snapshot.csv"
-LOG_FILE = "queue_totals.csv"
-LATENCY_FILE = "latency_log.csv"
-
-# ---------- Queues ----------
+# Queues
 high_priority_queue = deque()
 low_priority_queue = deque()
 queue_lock = threading.Lock()
 
-# ---------- Monotonic Timestamp ----------
-_last_timestamp_lock = threading.Lock()
-_last_timestamp = None
+# Maximum queue sizes
+MAX_HIGH_QUEUE = 50
+MAX_LOW_QUEUE = 50
 
-def current_timestamp():
-    """Return microsecond-precision timestamp with monotonic guarantee."""
-    global _last_timestamp
-    with _last_timestamp_lock:
-        now = datetime.now()
-        ts = now.strftime('%Y-%m-%d %H:%M:%S.%f')
-        if _last_timestamp and ts <= _last_timestamp:
-            # Increment microseconds by 1
-            prev = datetime.strptime(_last_timestamp, '%Y-%m-%d %H:%M:%S.%f')
-            now = prev + timedelta(microseconds=1)
-            ts = now.strftime('%Y-%m-%d %H:%M:%S.%f')
-        _last_timestamp = ts
-        return ts
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY = 0.5  # seconds
 
-# ---------- CSV Initialization ----------
-for file, headers in [
-    (SNAPSHOT_FILE, ["timestamp","high_queue_high","high_queue_low","low_queue_high","low_queue_low"]),
-    (LOG_FILE, ["timestamp","total_high","total_low"]),
-    (LATENCY_FILE, ["request_number","priority_level","latency_seconds","timestamp"])
-]:
+# Snapshot configuration
+SNAPSHOT_FILE = "queue_snapshot.csv"
+SNAPSHOT_INTERVAL = 0.1  # seconds
+
+# Queue totals log file
+LOG_FILE = "queue_totals.csv"
+
+# Latency log file
+LATENCY_FILE = "latency_log.csv"
+
+# ---------- Initialize CSVs ----------
+for file, headers in [(SNAPSHOT_FILE, ["timestamp","high_queue_high","high_queue_low","low_queue_high","low_queue_low"]),
+                      (LOG_FILE, ["timestamp","total_high","total_low"]),
+                      (LATENCY_FILE, ["request_number","priority_level","latency_seconds","timestamp"])]:
     if not os.path.exists(file):
         with open(file, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
 
-# ---------- Helper Functions ----------
+# ---------- Helpers ----------
 def log_latency(request_data, latency):
-    timestamp = current_timestamp()
+    """Log per-request latency to CSV."""
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     try:
         with open(LATENCY_FILE, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([request_data["request_number"], request_data["priority_level"], round(latency, 6), timestamp])
-        print(f"Latency logged for request {request_data['request_number']} ({request_data['priority_level']}): {latency:.6f}s")
+            writer.writerow([
+                request_data["request_number"],
+                request_data["priority_level"],
+                round(latency, 6),
+                timestamp
+            ])
+        print(f"Latency logged for request {request_data['request_number']} "
+              f"({request_data['priority_level']}): {latency:.6f}s")
     except Exception as e:
         print(f"Error logging latency: {e}")
 
 def send_post_with_retry(url, headers, payload, request_data):
+    """Send a POST request with retry logic."""
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             requests.post(url, json=payload, headers=headers, timeout=30)
@@ -84,13 +80,13 @@ def send_post_with_retry(url, headers, payload, request_data):
                 print(f"Request {request_data['request_number']} failed after {MAX_RETRIES} attempts")
                 return False
 
-def forward_request(request_data, executor_ip):
-    executor_url = f"http://{executor_ip}:80"
-    host_header = f"{request_data['priority_level']}priorityfunc.default.{executor_ip}.sslip.io"
+def forward_request(request_data):
+    """Forward request to CLOUD with retry."""
+    executor_url = f"http://{CLOUD_IP}:80"
+    host_header = f"{request_data['priority_level']}priorityfunc.default.{CLOUD_IP}.sslip.io"
     headers = {"Host": host_header, "Content-Type": "application/json"}
-    payload = {"request_number": request_data["request_number"], "priority_level": request_data["priority_level"]}
-    send_post_with_retry(executor_url, headers, payload, request_data)
-    print(f"Forwarded {request_data['priority_level']} request {request_data['request_number']} to {executor_ip}")
+    send_post_with_retry(executor_url, headers, request_data, request_data)
+    print(f"Forwarded {request_data['priority_level']} request {request_data['request_number']} to CLOUD")
 
 # ---------- HTTP Handler ----------
 class CustomHandler(SimpleHTTPRequestHandler):
@@ -103,6 +99,7 @@ class CustomHandler(SimpleHTTPRequestHandler):
 
         post_data = self.rfile.read(content_length)
         try:
+            # Parse JSON or form data
             if self.headers.get('Content-Type') == 'application/json':
                 data = json.loads(post_data.decode('utf-8'))
                 request_number = data.get('request_number')
@@ -117,7 +114,11 @@ class CustomHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            request_data = {"request_number": request_number, "priority_level": priority_level, "timestamp": time.time()}
+            request_data = {
+                "request_number": request_number,
+                "priority_level": priority_level,
+                "timestamp": time.time()
+            }
 
             with queue_lock:
                 if priority_level.lower() == "high":
@@ -125,16 +126,16 @@ class CustomHandler(SimpleHTTPRequestHandler):
                         high_priority_queue.append(request_data)
                         print(f"Added HIGH request {request_number} to HIGH queue ({len(high_priority_queue)})")
                     else:
-                        forward_request(request_data, CLOUD_IP)
+                        forward_request(request_data)
                         self.send_response(200)
                         self.end_headers()
                         return
-                else:
+                else:  # Low-priority
                     if len(low_priority_queue) < MAX_LOW_QUEUE:
                         low_priority_queue.append(request_data)
                         print(f"Added LOW request {request_number} to LOW queue ({len(low_priority_queue)})")
                     else:
-                        forward_request(request_data, CLOUD_IP)
+                        forward_request(request_data)
                         self.send_response(200)
                         self.end_headers()
                         return
@@ -148,22 +149,38 @@ class CustomHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-# ---------- Queue Processing ----------
-def process_queue(queue, executor_ip, queue_name):
+# ---------- Queue Processor ----------
+def process_queue():
+    """Process high-priority first, then low-priority requests, with retry."""
     while True:
-        request_data = None
-        with queue_lock:
-            if queue:
-                request_data = queue.popleft()
+        try:
+            request_data = None
+            with queue_lock:
+                if high_priority_queue:
+                    request_data = high_priority_queue.popleft()
+                elif low_priority_queue:
+                    request_data = low_priority_queue.popleft()
 
-        if request_data:
-            forward_request(request_data, executor_ip)
-            print(f"Processed {queue_name} request {request_data['request_number']}")
-        else:
-            time.sleep(0.05)
+            if request_data:
+                executor_url = f"http://{EDGE_IP}:80"
+                host_header = f"{request_data['priority_level']}priorityfunc.default.{EDGE_IP}.sslip.io"
+                payload = {
+                    "request_number": request_data["request_number"],
+                    "priority_level": request_data["priority_level"]
+                }
+                headers = {"Host": host_header, "Content-Type": "application/json"}
+
+                send_post_with_retry(executor_url, headers, payload, request_data)
+                print(f"Processed {request_data['priority_level']} request {request_data['request_number']}")
+            else:
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"Queue processor error: {e}")
+            time.sleep(1)
 
 # ---------- Queue Totals Logger ----------
 def log_queue_counts():
+    """Log total high and low requests every second to both console and file."""
     while True:
         try:
             with queue_lock:
@@ -172,12 +189,17 @@ def log_queue_counts():
                 total_low = sum(1 for r in high_priority_queue if r["priority_level"].lower() != "high") + \
                             sum(1 for r in low_priority_queue if r["priority_level"].lower() != "high")
 
-            timestamp = current_timestamp()
-            print(f"[{timestamp}] Total HIGH requests: {total_high}, Total LOW requests: {total_low}")
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            log_line = f"[{timestamp}] Total HIGH requests: {total_high}, Total LOW requests: {total_low}"
 
+            # Print to console
+            print(log_line)
+
+            # Write to CSV
             with open(LOG_FILE, "a", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([timestamp, total_high, total_low])
+
         except Exception as e:
             print(f"Logging error: {e}")
 
@@ -189,18 +211,11 @@ def run_server():
     port = 8000
     server = HTTPServer((host, port), CustomHandler)
 
-    # Start multiple high-priority workers
-    HIGH_WORKERS = 3
-    for _ in range(HIGH_WORKERS):
-        threading.Thread(target=process_queue, args=(high_priority_queue, EDGE_IP, "HIGH"), daemon=True).start()
-
-    # Start single low-priority worker
-    threading.Thread(target=process_queue, args=(low_priority_queue, EDGE_IP, "LOW"), daemon=True).start()
-
-    # Start logger
     threading.Thread(target=log_queue_counts, daemon=True).start()
+    threading.Thread(target=process_queue, daemon=True).start()
 
     print(f"Server running at http://{host}:{port}")
+    print(f"Queue snapshots every {int(SNAPSHOT_INTERVAL*1000)} ms to {SNAPSHOT_FILE}")
     print(f"High/Low priority queues enabled (max HIGH={MAX_HIGH_QUEUE}, LOW={MAX_LOW_QUEUE})")
     print("Press Ctrl+C to stop the server")
 

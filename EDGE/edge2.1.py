@@ -29,24 +29,6 @@ high_priority_queue = deque()
 low_priority_queue = deque()
 queue_lock = threading.Lock()
 
-# ---------- Monotonic Timestamp ----------
-_last_timestamp_lock = threading.Lock()
-_last_timestamp = None
-
-def current_timestamp():
-    """Return microsecond-precision timestamp with monotonic guarantee."""
-    global _last_timestamp
-    with _last_timestamp_lock:
-        now = datetime.now()
-        ts = now.strftime('%Y-%m-%d %H:%M:%S.%f')
-        if _last_timestamp and ts <= _last_timestamp:
-            # Increment microseconds by 1
-            prev = datetime.strptime(_last_timestamp, '%Y-%m-%d %H:%M:%S.%f')
-            now = prev + timedelta(microseconds=1)
-            ts = now.strftime('%Y-%m-%d %H:%M:%S.%f')
-        _last_timestamp = ts
-        return ts
-
 # ---------- CSV Initialization ----------
 for file, headers in [
     (SNAPSHOT_FILE, ["timestamp","high_queue_high","high_queue_low","low_queue_high","low_queue_low"]),
@@ -59,6 +41,10 @@ for file, headers in [
             writer.writerow(headers)
 
 # ---------- Helper Functions ----------
+def current_timestamp():
+    """Return current timestamp with milliseconds."""
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
 def log_latency(request_data, latency):
     timestamp = current_timestamp()
     try:
@@ -190,11 +176,11 @@ def run_server():
     server = HTTPServer((host, port), CustomHandler)
 
     # Start multiple high-priority workers
-    HIGH_WORKERS = 3
+    HIGH_WORKERS = 3  # or more depending on your CPU/network capacity
     for _ in range(HIGH_WORKERS):
         threading.Thread(target=process_queue, args=(high_priority_queue, EDGE_IP, "HIGH"), daemon=True).start()
 
-    # Start single low-priority worker
+    # Start single low-priority worker (or multiple if needed)
     threading.Thread(target=process_queue, args=(low_priority_queue, EDGE_IP, "LOW"), daemon=True).start()
 
     # Start logger

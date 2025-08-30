@@ -1,3 +1,5 @@
 aiohttp==3.9.5
 datetime
 psutil
+flask
+requests
