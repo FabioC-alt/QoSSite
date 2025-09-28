@@ -23,6 +23,7 @@ RETRY_DELAY = 0.5  # seconds
 SNAPSHOT_FILE = "queue_snapshot.csv"
 LOG_FILE = "queue_totals.csv"
 LATENCY_FILE = "latency_log.csv"
+SCHEDULING_FILE = "scheduling_log.csv"
 
 # ---------- Queues ----------
 high_priority_queue = deque()
@@ -33,7 +34,8 @@ queue_lock = threading.Lock()
 for file, headers in [
     (SNAPSHOT_FILE, ["timestamp","high_queue_high","high_queue_low","low_queue_high","low_queue_low"]),
     (LOG_FILE, ["timestamp","total_high","total_low"]),
-    (LATENCY_FILE, ["request_number","priority_level","latency_seconds","timestamp"])
+    (LATENCY_FILE, ["request_number","priority_level","latency_seconds","timestamp"]),
+    (SCHEDULING_FILE, ["request_number","priority_level","scheduling_seconds","timestamp"])
 ]:
     if not os.path.exists(file):
         with open(file, "w", newline="") as f:
@@ -54,6 +56,22 @@ def log_latency(request_data, latency):
         print(f"Latency logged for request {request_data['request_number']} ({request_data['priority_level']}): {latency:.6f}s")
     except Exception as e:
         print(f"Error logging latency: {e}")
+
+def log_scheduling(request_data, scheduling_time):
+    timestamp = current_timestamp()
+    try:
+        with open(SCHEDULING_FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                request_data["request_number"],
+                request_data["priority_level"],
+                round(scheduling_time, 6),
+                timestamp
+            ])
+        print(f"Scheduling logged for request {request_data['request_number']} "
+              f"({request_data['priority_level']}): {scheduling_time:.6f}s")
+    except Exception as e:
+        print(f"Error logging scheduling: {e}")
 
 def send_post_with_retry(url, headers, payload, request_data):
     for attempt in range(1, MAX_RETRIES + 1):
@@ -103,7 +121,12 @@ class CustomHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            request_data = {"request_number": request_number, "priority_level": priority_level, "timestamp": time.time()}
+            request_data = {
+                "request_number": request_number,
+                "priority_level": priority_level,
+                "timestamp": time.time(),       # per latenza totale
+                "received_time": time.time()    # per scheduling
+            }
 
             with queue_lock:
                 if priority_level.lower() == "high":
@@ -143,6 +166,10 @@ def process_queue(queue, executor_ip, queue_name):
                 request_data = queue.popleft()
 
         if request_data:
+            # Calcola tempo di scheduling
+            scheduling_time = time.time() - request_data["received_time"]
+            log_scheduling(request_data, scheduling_time)
+
             forward_request(request_data, executor_ip)
             print(f"Processed {queue_name} request {request_data['request_number']}")
         else:
@@ -176,15 +203,13 @@ def run_server():
     server = HTTPServer((host, port), CustomHandler)
 
     # Start multiple high-priority workers
-    HIGH_WORKERS = 6 # or more depending on your CPU/network capacity
+    HIGH_WORKERS = 40
     for _ in range(HIGH_WORKERS):
         threading.Thread(target=process_queue, args=(high_priority_queue, EDGE_IP, "HIGH"), daemon=True).start()
 
-
-    LOW_WORKERS = 3
-
+    # Start multiple low-priority workers
+    LOW_WORKERS = 20
     for _ in range(LOW_WORKERS):
-    # Start single low-priority worker (or multiple if needed)
         threading.Thread(target=process_queue, args=(low_priority_queue, EDGE_IP, "LOW"), daemon=True).start()
 
     # Start logger

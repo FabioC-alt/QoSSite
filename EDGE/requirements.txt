@@ -3,3 +3,5 @@ datetime
 psutil
 flask
 requests
+httpx
+kubernetes

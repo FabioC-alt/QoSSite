@@ -23,6 +23,7 @@ RETRY_DELAY = 0.5  # seconds
 SNAPSHOT_FILE = "queue_snapshot.csv"
 LOG_FILE = "queue_totals.csv"
 LATENCY_FILE = "latency_log.csv"
+SCHEDULING_FILE = "scheduling_log.csv"
 
 # ---------- Queues ----------
 high_priority_queue = deque()
@@ -33,7 +34,8 @@ queue_lock = threading.Lock()
 for file, headers in [
     (SNAPSHOT_FILE, ["timestamp","high_queue_high","high_queue_low","low_queue_high","low_queue_low"]),
     (LOG_FILE, ["timestamp","total_high","total_low"]),
-    (LATENCY_FILE, ["request_number","priority_level","latency_seconds","timestamp"])
+    (LATENCY_FILE, ["request_number","priority_level","latency_ms","timestamp"]),
+    (SCHEDULING_FILE, ["request_number","priority_level","scheduling_ms","timestamp"])
 ]:
     if not os.path.exists(file):
         with open(file, "w", newline="") as f:
@@ -42,25 +44,45 @@ for file, headers in [
 
 # ---------- Helper Functions ----------
 def current_timestamp():
-    """Return current timestamp with milliseconds."""
+    """Return current wall-clock timestamp with milliseconds (for human-readable logs)."""
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-def log_latency(request_data, latency):
+def log_latency(request_data, latency_s):
+    """Log total latency in ms"""
+    latency_ms = latency_s * 1000
     timestamp = current_timestamp()
     try:
         with open(LATENCY_FILE, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([request_data["request_number"], request_data["priority_level"], round(latency, 6), timestamp])
-        print(f"Latency logged for request {request_data['request_number']} ({request_data['priority_level']}): {latency:.6f}s")
+            writer.writerow([request_data["request_number"], request_data["priority_level"], round(latency_ms, 3), timestamp])
+        print(f"Latency logged for request {request_data['request_number']} ({request_data['priority_level']}): {latency_ms:.3f} ms")
     except Exception as e:
         print(f"Error logging latency: {e}")
+
+def log_scheduling(request_data, scheduling_s):
+    """Log scheduling time in ms"""
+    scheduling_ms = scheduling_s * 1000
+    timestamp = current_timestamp()
+    try:
+        with open(SCHEDULING_FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                request_data["request_number"],
+                request_data["priority_level"],
+                round(scheduling_ms, 3),
+                timestamp
+            ])
+        print(f"Scheduling logged for request {request_data['request_number']} "
+              f"({request_data['priority_level']}): {scheduling_ms:.3f} ms")
+    except Exception as e:
+        print(f"Error logging scheduling: {e}")
 
 def send_post_with_retry(url, headers, payload, request_data):
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             requests.post(url, json=payload, headers=headers, timeout=30)
-            latency = time.time() - request_data["timestamp"]
-            log_latency(request_data, latency)
+            latency_s = time.perf_counter() - request_data["start_time"]
+            log_latency(request_data, latency_s)
             return True
         except requests.exceptions.RequestException as e:
             print(f"Attempt {attempt} failed for request {request_data['request_number']}: {e}")
@@ -103,7 +125,13 @@ class CustomHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            request_data = {"request_number": request_number, "priority_level": priority_level, "timestamp": time.time()}
+            now = time.perf_counter()
+            request_data = {
+                "request_number": request_number,
+                "priority_level": priority_level,
+                "start_time": now,      # per latenza totale
+                "received_time": now    # per scheduling
+            }
 
             with queue_lock:
                 if priority_level.lower() == "high":
@@ -143,6 +171,10 @@ def process_queue(queue, executor_ip, queue_name):
                 request_data = queue.popleft()
 
         if request_data:
+            # Calcola tempo di scheduling
+            scheduling_s = time.perf_counter() - request_data["received_time"]
+            log_scheduling(request_data, scheduling_s)
+
             forward_request(request_data, executor_ip)
             print(f"Processed {queue_name} request {request_data['request_number']}")
         else:
@@ -176,15 +208,13 @@ def run_server():
     server = HTTPServer((host, port), CustomHandler)
 
     # Start multiple high-priority workers
-    HIGH_WORKERS = 6 # or more depending on your CPU/network capacity
+    HIGH_WORKERS = 1
     for _ in range(HIGH_WORKERS):
         threading.Thread(target=process_queue, args=(high_priority_queue, EDGE_IP, "HIGH"), daemon=True).start()
 
-
-    LOW_WORKERS = 3
-
+    # Start multiple low-priority workers
+    LOW_WORKERS = 1
     for _ in range(LOW_WORKERS):
-    # Start single low-priority worker (or multiple if needed)
         threading.Thread(target=process_queue, args=(low_priority_queue, EDGE_IP, "LOW"), daemon=True).start()
 
     # Start logger

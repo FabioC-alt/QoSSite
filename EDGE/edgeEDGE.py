@@ -23,6 +23,34 @@ RETRY_DELAY = 0.5  # seconds
 SNAPSHOT_FILE = "queue_snapshot.csv"
 LOG_FILE = "queue_totals.csv"
 LATENCY_FILE = "latency_log.csv"
+SCHEDULING_FILE = "scheduling_log.csv"
+
+# ---------- Available FaaS Deployments ----------
+ALL_FAAS_HIGH = [
+    "highpriorityfunc",
+    "highpriorityfunc2",
+    "highpriorityfunc3",
+    "highpriorityfunc4",
+    "highpriorityfunc5",
+    "highpriorityfunc6",
+    "highpriorityfunc7",
+    "highpriorityfunc8"
+]
+
+ALL_FAAS_LOW = [
+    "lowpriorityfunc",
+    "lowpriorityfunc2",
+    "lowpriorityfunc3",
+    "lowpriorityfunc4",
+    "lowpriorityfunc5"
+]
+
+# ---------- Select how many functions to use ----------
+USE_HIGH_FUNCS = 1   # if 0 -> HIGH disabled
+USE_LOW_FUNCS = 1    # if 0 -> LOW disabled
+
+FAAS_HIGH = ALL_FAAS_HIGH[:USE_HIGH_FUNCS] if USE_HIGH_FUNCS > 0 else []
+FAAS_LOW = ALL_FAAS_LOW[:USE_LOW_FUNCS] if USE_LOW_FUNCS > 0 else []
 
 # ---------- Queues ----------
 high_priority_queue = deque()
@@ -33,7 +61,8 @@ queue_lock = threading.Lock()
 for file, headers in [
     (SNAPSHOT_FILE, ["timestamp","high_queue_high","high_queue_low","low_queue_high","low_queue_low"]),
     (LOG_FILE, ["timestamp","total_high","total_low"]),
-    (LATENCY_FILE, ["request_number","priority_level","latency_seconds","timestamp"])
+    (LATENCY_FILE, ["request_number","priority_level","latency_seconds","timestamp"]),
+    (SCHEDULING_FILE, ["request_number","priority_level","scheduling_seconds","timestamp"])
 ]:
     if not os.path.exists(file):
         with open(file, "w", newline="") as f:
@@ -42,7 +71,6 @@ for file, headers in [
 
 # ---------- Helper Functions ----------
 def current_timestamp():
-    """Return current timestamp with milliseconds."""
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
 def log_latency(request_data, latency):
@@ -54,6 +82,22 @@ def log_latency(request_data, latency):
         print(f"Latency logged for request {request_data['request_number']} ({request_data['priority_level']}): {latency:.6f}s")
     except Exception as e:
         print(f"Error logging latency: {e}")
+
+def log_scheduling(request_data, scheduling_time):
+    timestamp = current_timestamp()
+    try:
+        with open(SCHEDULING_FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                request_data["request_number"],
+                request_data["priority_level"],
+                round(scheduling_time, 6),
+                timestamp
+            ])
+        print(f"Scheduling logged for request {request_data['request_number']} "
+              f"({request_data['priority_level']}): {scheduling_time:.6f}s")
+    except Exception as e:
+        print(f"Error logging scheduling: {e}")
 
 def send_post_with_retry(url, headers, payload, request_data):
     for attempt in range(1, MAX_RETRIES + 1):
@@ -70,13 +114,27 @@ def send_post_with_retry(url, headers, payload, request_data):
                 print(f"Request {request_data['request_number']} failed after {MAX_RETRIES} attempts")
                 return False
 
-def forward_request(request_data, executor_ip):
-    executor_url = f"http://{executor_ip}:80"
-    host_header = f"{request_data['priority_level']}priorityfunc.default.{executor_ip}.sslip.io"
+# ---------- Round-robin Dispatcher ----------
+high_counter = 0
+low_counter = 0
+
+def forward_request(request_data, priority_level):
+    global high_counter, low_counter
+
+    if priority_level.lower() == "high":
+        target = FAAS_HIGH[high_counter % len(FAAS_HIGH)]
+        high_counter += 1
+    else:
+        target = FAAS_LOW[low_counter % len(FAAS_LOW)]
+        low_counter += 1
+
+    executor_url = f"http://{EDGE_IP}:80"
+    host_header = f"{target}.default.{EDGE_IP}.sslip.io"
     headers = {"Host": host_header, "Content-Type": "application/json"}
     payload = {"request_number": request_data["request_number"], "priority_level": request_data["priority_level"]}
+
     send_post_with_retry(executor_url, headers, payload, request_data)
-    print(f"Forwarded {request_data['priority_level']} request {request_data['request_number']} to {executor_ip}")
+    print(f"Forwarded {priority_level.upper()} request {request_data['request_number']} to {target}")
 
 # ---------- HTTP Handler ----------
 class CustomHandler(SimpleHTTPRequestHandler):
@@ -103,24 +161,39 @@ class CustomHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            request_data = {"request_number": request_number, "priority_level": priority_level, "timestamp": time.time()}
+            request_data = {
+                "request_number": request_number,
+                "priority_level": priority_level,
+                "timestamp": time.time(),
+                "received_time": time.time()
+            }
 
             with queue_lock:
                 if priority_level.lower() == "high":
+                    if not FAAS_HIGH:
+                        print(f"Rejected HIGH request {request_number} (no HIGH functions enabled)")
+                        self.send_response(503)
+                        self.end_headers()
+                        return
                     if len(high_priority_queue) < MAX_HIGH_QUEUE:
                         high_priority_queue.append(request_data)
                         print(f"Added HIGH request {request_number} to HIGH queue ({len(high_priority_queue)})")
                     else:
-                        forward_request(request_data, CLOUD_IP)
+                        forward_request(request_data, "high")
                         self.send_response(200)
                         self.end_headers()
                         return
                 else:
+                    if not FAAS_LOW:
+                        print(f"Rejected LOW request {request_number} (no LOW functions enabled)")
+                        self.send_response(503)
+                        self.end_headers()
+                        return
                     if len(low_priority_queue) < MAX_LOW_QUEUE:
                         low_priority_queue.append(request_data)
                         print(f"Added LOW request {request_number} to LOW queue ({len(low_priority_queue)})")
                     else:
-                        forward_request(request_data, CLOUD_IP)
+                        forward_request(request_data, "low")
                         self.send_response(200)
                         self.end_headers()
                         return
@@ -135,7 +208,7 @@ class CustomHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
 # ---------- Queue Processing ----------
-def process_queue(queue, executor_ip, queue_name):
+def process_queue(queue, queue_name):
     while True:
         request_data = None
         with queue_lock:
@@ -143,7 +216,10 @@ def process_queue(queue, executor_ip, queue_name):
                 request_data = queue.popleft()
 
         if request_data:
-            forward_request(request_data, executor_ip)
+            scheduling_time = time.time() - request_data["received_time"]
+            log_scheduling(request_data, scheduling_time)
+
+            forward_request(request_data, request_data["priority_level"])
             print(f"Processed {queue_name} request {request_data['request_number']}")
         else:
             time.sleep(0.05)
@@ -175,23 +251,17 @@ def run_server():
     port = 8000
     server = HTTPServer((host, port), CustomHandler)
 
-    # Start multiple high-priority workers
-    HIGH_WORKERS = 6 # or more depending on your CPU/network capacity
-    for _ in range(HIGH_WORKERS):
-        threading.Thread(target=process_queue, args=(high_priority_queue, EDGE_IP, "HIGH"), daemon=True).start()
+    # Start one worker per queue
+    if FAAS_HIGH:
+        threading.Thread(target=process_queue, args=(high_priority_queue, "HIGH"), daemon=True).start()
+    if FAAS_LOW:
+        threading.Thread(target=process_queue, args=(low_priority_queue, "LOW"), daemon=True).start()
 
-
-    LOW_WORKERS = 3
-
-    for _ in range(LOW_WORKERS):
-    # Start single low-priority worker (or multiple if needed)
-        threading.Thread(target=process_queue, args=(low_priority_queue, EDGE_IP, "LOW"), daemon=True).start()
-
-    # Start logger
     threading.Thread(target=log_queue_counts, daemon=True).start()
 
     print(f"Server running at http://{host}:{port}")
-    print(f"High/Low priority queues enabled (max HIGH={MAX_HIGH_QUEUE}, LOW={MAX_LOW_QUEUE})")
+    print(f"High priority functions in use: {FAAS_HIGH if FAAS_HIGH else 'DISABLED'}")
+    print(f"Low priority functions in use: {FAAS_LOW if FAAS_LOW else 'DISABLED'}")
     print("Press Ctrl+C to stop the server")
 
     try:
